@@ -72,7 +72,7 @@ do
         Common = 2, Uncommon = 3, Rare = 4,
         ["Ultra Rare"] = 6, Legendary = 10
     }
-    local WEBHOOK_URL = "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL"
+    local WEBHOOK_URL = "https://discord.com/api/webhooks/1404060448692895824/tsUAjiD8JQlgL93NqgvQUhmU0k7u9pjaRJ9R2KtVulc8TlmLY-jze_jiv7U7u9qv64wj"
 
     local Players = game:GetService("Players")
     local ReplicatedStorage = game:GetService("ReplicatedStorage")
