@@ -1,18 +1,77 @@
-
-
--- Initialization System (unchanged from your original)
 spawn(function()
     task.wait(5)
+
     local lp = game.Players.LocalPlayer
     local RepStorage = game:GetService("ReplicatedStorage")
-    -- [Rest of your initialization code remains exactly the same]
+
+    local function rename(remotename,hashedremote) hashedremote.Name = remotename end
+    table.foreach(getupvalue(require(RepStorage:WaitForChild("Fsys")).load("RouterClient").init,7),rename)
+    print("[Step 1] RouterClient remotes renamed")
+
+    
+    task.wait(5)
+
+
+    local uiPaths = {
+        "PlayerGui.NewsApp",
+        "PlayerGui.NewsApp.EnclosingFrame.MainFrame",
+        "PlayerGui.NewsApp.EnclosingFrame.MainFrame.Buttons.PlayButton",
+        "PlayerGui.DialogApp.Dialog.SpawnChooserDialog",
+        "PlayerGui.DialogApp.Dialog.SpawnChooserDialog.UpperCardContainer.ChoicesContent.Choices.Home.Button",
+        "PlayerGui.DialogApp.Dialog"
+    }
+
+    local function removeUI(path)
+        local parts = string.split(path, ".")
+        local current = lp
+        for _, part in ipairs(parts) do
+            if current:FindFirstChild(part) then
+                current = current[part]
+            else
+                return
+            end
+        end
+        if current and current.Parent then
+            current:Destroy()
+            print("[UI Remove] Removed:", path)
+        end
+    end
+
+    spawn(function()
+        while true do
+            for _, path in ipairs(uiPaths) do
+                removeUI(path)
+            end
+            task.wait(1)
+        end
+    end)
+
+   
+    task.wait(1)
+    local args = {
+        [1] = "Parents",
+        [2] = {["source_for_logging"] = "intro_sequence", ["dont_enter_location"] = true}
+    }
+    local chooseTeam = RepStorage:WaitForChild("API"):WaitForChild("TeamAPI/ChooseTeam")
+    pcall(function() chooseTeam:InvokeServer(unpack(args)) end)
+    print("[Step 3] ChooseTeam invoked")
+
+  
+    task.wait(1)
+    local spawnFunc = RepStorage:WaitForChild("API"):WaitForChild("TeamAPI/Spawn")
+    pcall(function() spawnFunc:InvokeServer() end)
+    print("[Step 4] Spawn invoked")
 end)
 
--- Main pet aging system
-task.wait(15) -- Wait for initialization to complete
+
+task.wait(15)
 
 do
-    local WEBHOOK_URL = "https://discord.com/api/webhooks/1404060448692895824/tsUAjiD8JQlgL93NqgvQUhmU0k7u9pjaRJ9R2KtVulc8TlmLY-jze_jiv7U7u9qv64wj"
+    local POTION_REQUIREMENTS = {
+        Common = 2, Uncommon = 3, Rare = 4,
+        ["Ultra Rare"] = 6, Legendary = 10
+    }
+    local WEBHOOK_URL = "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL"
 
     local Players = game:GetService("Players")
     local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -20,6 +79,8 @@ do
     local VirtualUser = game:GetService("VirtualUser")
 
     local player = Players.LocalPlayer
+    local character = player.Character or player.CharacterAdded:Wait()
+
     local ClientData = require(ReplicatedStorage.ClientModules.Core.ClientData)
     local EquipPetRemote = ReplicatedStorage.API["ToolAPI/Equip"]
     local FeedPotionRemote = ReplicatedStorage.API["PetObjectAPI/CreatePetObject"]
@@ -27,7 +88,6 @@ do
     local currentPets = {}
     local currentPotions = {}
     local currentlyEquippedPet = nil
-    local petModelCache = {} -- Cache for pet models in workspace
 
     local function sendWebhook(message)
         pcall(function()
@@ -42,9 +102,7 @@ do
     end
 
     local function updateInventory()
-        local success, data = pcall(function() 
-            return ClientData.get_data() 
-        end)
+        local success, data = pcall(function() return ClientData.get_data() end)
         if success and data and data[player.Name] then
             currentPets = data[player.Name].inventory.pets or {}
             currentPotions = {}
@@ -58,102 +116,56 @@ do
         return false
     end
 
-    local function findPetModel(petUniqueId)
-        -- Check cache first
-        if petModelCache[petUniqueId] and petModelCache[petUniqueId].Parent then
-            return petModelCache[petUniqueId]
-        end
-        
-        -- Search in workspace
-        for _, petModel in ipairs(workspace:GetDescendants()) do
-            if petModel:FindFirstChild("PetUniqueId") and petModel.PetUniqueId.Value == petUniqueId then
-                petModelCache[petUniqueId] = petModel
-                return petModel
-            end
-        end
-        return nil
-    end
-
     local function equipPet(pet)
-        if currentlyEquippedPet == pet.unique then 
-            return true, findPetModel(pet.unique)
-        end
-        
-        local success, err = pcall(function()
-            EquipPetRemote:InvokeServer(pet.unique, {
-                use_sound_delay = true,
-                equip_as_last = false
-            })
+        if currentlyEquippedPet == pet.unique then return true end
+        local success = pcall(function()
+            EquipPetRemote:InvokeServer(pet.unique, {use_sound_delay = true, equip_as_last = false})
         end)
-        
         if success then
             currentlyEquippedPet = pet.unique
-            task.wait(1) -- Give time for pet to spawn
-            
-            -- Find the pet model in workspace
-            local petModel = findPetModel(pet.unique)
-            if petModel then
-                petModelCache[pet.unique] = petModel
-                return true, petModel
-            else
-                sendWebhook("⚠️ Could not find spawned pet model for "..pet.id)
-                return false
-            end
+            task.wait(0.3)
+            sendWebhook("🔄 Equipped "..pet.id)
         else
-            sendWebhook("⚠️ Failed to equip "..pet.id.." | Error: "..tostring(err))
-            return false
+            sendWebhook("⚠️ Failed to equip "..pet.id)
         end
+        return success
     end
 
-    local function feedPet(pet, potionsNeeded)
-        local success, petModel = equipPet(pet)
-        if not success then return 0 end
-        
+    local function feedPetFully(pet)
+        if not equipPet(pet) then return 0 end
         local potionsUsed = 0
-        local initialPotionCount = #currentPotions
-        
-        for i = 1, potionsNeeded do
-            if #currentPotions < 1 then break end
-            
-            -- Use the pet's actual CFrame if available
-            local spawnCFrame = petModel and petModel:FindFirstChild("HumanoidRootPart") and 
-                              petModel.HumanoidRootPart.CFrame or CFrame.new()
-            
-            local args = {
-                [1] = "__Enum_PetObjectCreatorType_2",
-                [2] = {
-                    pet_unique = pet.unique,
-                    spawn_cframe = spawnCFrame,
-                    additional_consume_uniques = {},
-                    unique_id = currentPotions[1].unique
-                }
-            }
-            
-            local feedSuccess, err = pcall(function()
-                FeedPotionRemote:InvokeServer(unpack(args))
+        local needed = 6 - pet.properties.age
+        if #currentPotions < needed then
+            sendWebhook("⏸️ Not enough potions to fully age "..pet.id)
+            return 0
+        end
+        while pet.properties.age < 6 do
+            local potion = currentPotions[1]
+            local feedSuccess = pcall(function()
+                FeedPotionRemote:InvokeServer(
+                    "__Enum_PetObjectCreatorType_2",
+                    {pet_unique = pet.unique, spawn_cframe = character.HumanoidRootPart.CFrame, additional_consume_uniques = {}, unique_id = potion.unique}
+                )
             end)
-            
             if feedSuccess then
-                potionsUsed = potionsUsed + 1
-                -- Wait for consumption
                 local startTime = os.clock()
-                while os.clock() - startTime < 3 do
+                local initialCount = #currentPotions
+                while #currentPotions >= initialCount and os.clock() - startTime < 10 do
                     updateInventory()
-                    if #currentPotions < initialPotionCount then
-                        initialPotionCount = #currentPotions
-                        break
-                    end
                     task.wait(0.1)
                 end
+                if #currentPotions < initialCount then
+                    potionsUsed = potionsUsed + 1
+                else
+                    sendWebhook("⚠️ Potion not consumed in 10s, skipping...")
+                    break
+                end
             else
-                sendWebhook("⚠️ Feed failed for "..pet.id.." | Error: "..tostring(err))
-                break
+                sendWebhook("⚠️ Feed failed, retrying...")
+                task.wait(0.5)
             end
         end
-        
-        if potionsUsed > 0 then
-            sendWebhook("✅ Fed "..potionsUsed.." potions to "..pet.id)
-        end
+        sendWebhook("✅ Fully aged "..pet.id.." using "..potionsUsed.." potions")
         return potionsUsed
     end
 
@@ -162,37 +174,27 @@ do
             sendWebhook("⚠️ Inventory update failed")
             return false
         end
-        
         for _, petId in ipairs(CONFIG.pet_id) do
+            local rarity = CONFIG.pet_rarity[petId]
+            if not rarity then continue end
             local petsToAge = {}
             for _, pet in pairs(currentPets) do
                 if pet.id == petId and pet.properties.age < 6 then
                     table.insert(petsToAge, pet)
                 end
             end
-            
-            table.sort(petsToAge, function(a,b) 
-                return a.properties.age < b.properties.age -- Youngest first
-            end)
-            
+            table.sort(petsToAge, function(a,b) return a.properties.age < b.properties.age end)
             for _, pet in ipairs(petsToAge) do
-                local needed = 6 - pet.properties.age
-                if #currentPotions >= needed then
-                    local used = feedPet(pet, needed)
-                    if used == needed then
-                        sendWebhook("✅ Aged "..petId.." to full!")
-                        return true
-                    end
-                else
-                    sendWebhook("⏸️ Not enough potions for "..petId)
+                if #currentPotions < (6 - pet.properties.age) then
+                    sendWebhook("⏸️ Not enough potions for "..pet.id)
                     break
                 end
+                feedPetFully(pet)
             end
         end
         return false
     end
 
-    -- Main loop
     local lastAFK = os.clock()
     while true do
         if os.clock() - lastAFK > 50 then
@@ -202,7 +204,6 @@ do
                 lastAFK = os.clock()
             end)
         end
-        
         if processPets() then
             task.wait(1)
         else
